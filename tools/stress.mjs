@@ -47,7 +47,63 @@ function turtle(state) {
   return { card: hand.includes('parry') ? 'parry' : hand[0], dir: 1 };
 }
 
-const POLICIES = { decent, chaos, coward, berserk, turtle };
+/**
+ * Never attacks: step when out of distance, parry when in.
+ *
+ * The council found this and it beat the reference player 64% to 56%, because parry weakly
+ * dominated step from inside distance and nothing punished a parry that caught nothing. `turtle`
+ * missed it by parrying out of distance too, where parry is simply bad. It is here permanently so
+ * that the degenerate line cannot come back unnoticed.
+ */
+function parryWall(state) {
+  const hand = state.you.hand;
+  const reach = inDistance(state.measure);
+  if (!reach) return { card: hand.includes('step') ? 'step' : hand[0], dir: 1 };
+  if (hand.includes('parry')) return { card: 'parry', dir: 1 };
+  return { card: hand.includes('step') ? 'step' : hand[0], dir: -1 };
+}
+
+/**
+ * Waits long enough to see the opponent shift its weight, then answers it.
+ *
+ * Every other policy plays on the first tick of its turn, so before this one existed the tell —
+ * the single strongest piece of information in the game — was covered by exactly zero of the
+ * 2000 bouts. `thinks` makes the harness let a tick pass first.
+ */
+function tellReader(state) {
+  const hand = state.you.hand;
+  const reach = inDistance(state.measure);
+  if (state.tell === 'weight' && hand.includes('parry')) return { card: 'parry', dir: 1 };
+  if (!reach) return { card: hand.includes('step') ? 'step' : hand[0], dir: 1 };
+  if (hand.includes('attack')) return { card: 'attack', dir: 1 };
+  return { card: hand[0], dir: 1 };
+}
+tellReader.thinks = true;
+
+/**
+ * Uses the feint on purpose: draw the parry with a step, then hit the opening.
+ *
+ * This is the policy that has to exist. The point of making a parry-onto-nothing leave you open
+ * was to give `step` a job from inside distance; if no play can actually convert that opening into
+ * a touch, the rule is decoration and the turtle is still unanswerable. This beating `parryWall`
+ * is the evidence that the triangle closed.
+ */
+function feint(state, rng, memo) {
+  const hand = state.you.hand;
+  const reach = inDistance(state.measure);
+  const has = (c) => hand.includes(c);
+  if (state.foe.open && reach && has('attack')) return { card: 'attack', dir: 1 };
+  if (!reach) return { card: has('step') ? 'step' : hand[0], dir: 1 };
+  if (state.tell === 'weight' && has('parry')) return { card: 'parry', dir: 1 };
+  // from inside distance, draw rather than commit — unless they have just been stepping, in which
+  // case there is nothing to draw and an attack is simply free
+  if (memo.lastTheirs === 'step' && has('attack')) return { card: 'attack', dir: 1 };
+  if (has('step')) return { card: 'step', dir: 1 };
+  return { card: has('attack') ? 'attack' : hand[0], dir: 1 };
+}
+feint.thinks = true;
+
+const POLICIES = { decent, chaos, coward, berserk, turtle, parryWall, tellReader, feint };
 const names = wanted === 'all' ? Object.keys(POLICIES) : [wanted];
 
 let bouts = 0, fails = 0, ticks = 0;
@@ -64,6 +120,8 @@ for (const name of names) {
 
     while (!s.over && guard++ < 40000) {
       if (s.phase === 'choose') {
+        // a policy that reads the tell has to let a tick pass before it decides
+        if (policy.thinks && s.tell === null) { step(s); s.events.length = 0; ticks++; continue; }
         const { card, dir } = policy(s, rng, memo);
         memo.lastTheirs = s.foe.card ?? memo.lastTheirs;
         play(s, card, dir);
@@ -93,6 +151,15 @@ for (const name of names) {
 
 const secs = (Date.now() - t0) / 1000;
 console.log(`\n${bouts} bouts, ${(ticks / 60 / 60).toFixed(1)} hours of fencing in ${secs.toFixed(1)}s`);
-for (const [k, n] of Object.entries(out).sort()) console.log(`  ${k.padEnd(22)} ${n}`);
+// Win rates per policy, because "nothing broke" says the bookkeeping is sound and says nothing at
+// all about whether one strategy quietly beats every other one.
+for (const name of names) {
+  const w = out[`${name}/win`] || 0, l = out[`${name}/lose`] || 0, d = out[`${name}/double-out`] || 0;
+  const tot = w + l + d;
+  if (!tot) continue;
+  console.log(`  ${name.padEnd(12)} win ${((w / tot) * 100).toFixed(1).padStart(5)}%` +
+              `  lose ${((l / tot) * 100).toFixed(1).padStart(5)}%` +
+              `  both out ${((d / tot) * 100).toFixed(1).padStart(5)}%`);
+}
 console.log(fails ? `\n${fails} FAILURES` : '\nnothing broken');
 process.exit(fails ? 1 : 0);
