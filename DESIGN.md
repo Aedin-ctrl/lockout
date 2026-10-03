@@ -28,12 +28,21 @@ can see what is left of it.
 | **PARRY** | beats an attack, and you score the riposte. Does nothing against anything else. |
 | **STEP** | closes or opens the distance. Scores nothing, risks nothing. |
 
-Which is a triangle: **attack beats step, parry beats attack, step beats parry** — because a parry
-with nothing to parry is a wasted turn and you have used the distance against them.
+Which is a triangle: **attack beats step, parry beats attack, step beats parry**.
+
+That third edge was a lie for the first version of this game, and §7.3 is the story of finding out.
+A parry with nothing to parry was simply a turn where nothing happened, and a turn where nothing
+happens costs nothing at all in a game with no clock and a reshuffling discard. So the rule now
+says what the sport says: **a parry that catches nothing leaves you open.** Draw the parry with a
+step and the next parry they attempt fails, which is one exchange in which an attack cannot be
+stopped. Step beats parry — a beat later, and only if you follow it up.
 
 ### Distance is the second axis
 
-Three measures: **out of distance**, **lunge**, **close**. A step moves one measure. An attack only
+**Four** measures: **out of distance**, **long**, **lunge**, **close**. A step moves one measure.
+(This section said three for a long time, and three is what the first build had — with three, two
+fencers both stepping in crossed from out of distance to close in a single turn, so every bout
+opened in a brawl and the manoeuvring never happened.) An attack only
 reaches from **lunge** or **close**; from out of distance it falls short and you have shown them
 your hand for nothing.
 
@@ -115,15 +124,89 @@ that goes to time is decided on touches, and the ending says so.
 
 ## 7.2 No dominant strategy
 
-Across four hundred bouts each:
+Across two thousand bouts each — **16,000 bouts, 7,354 hours of fencing, nothing broken**:
 
-| policy | wins |
+| policy | wins | what it is |
+|---|---|---|
+| draws the parry out | **64.2%** | step to pull the parry, attack the opening it leaves |
+| reads the tell | 59.1% | waits a beat, parries when the opponent shifts its weight |
+| never attacks | 55.5% | step when out of distance, parry when in |
+| plays it properly | 54.3% | the reference player |
+| always parries | 33.0% | |
+| always attacks | 31.8% | |
+| plays at random | 28.3% | |
+| always retreats | 21.1% | |
+
+The shape you want is the top of that table, not the bottom. Every single-card strategy losing is
+easy; what matters is that the best line is the one that uses all three cards and the information,
+and that it is about ten points ahead of simply playing sensibly rather than thirty.
+
+## 7.3 What the council found, and why the soak could not
+
+A reviewer went through the game with fresh eyes and a real browser, and almost everything it found
+was in the half of the codebase no tool in this repo imports. 2,000 bouts of soak proved the
+bookkeeping was sound and proved nothing whatsoever about the game.
+
+**The game had a dominant strategy and the harness's five policies all missed it.** Parry weakly
+dominated step from inside distance — 82% of all turns — because parry against step resolved to
+"nothing happens", and nothing happening is free. Write out the net touches from inside distance
+against an opponent playing attack `a`, parry `p`, step `s`:
+
+| my card | net touches |
 |---|---|
-| plays it properly | **57%** |
-| always parries | 35% |
-| always attacks | 30% |
-| plays at random | 30% |
-| always retreats | 24% |
+| attack | `s − p` |
+| parry | `+a` |
+| step | `−a` |
 
-Which is the shape you want: every single-card strategy loses to the opponent's memory, and
-understanding the triangle is worth about twenty-five points.
+Step is strictly dominated, so a third of the deck was dead a third of the time. A player who
+**simply never attacked** beat the reference player 64% to 56%. `turtle`, which was in the harness,
+missed it only because it parried out of distance too, where parry is bad; add one line and it
+jumps from 35% to 64%. A human finds this in about five minutes.
+
+The fix is the one the sport already uses, above: a parry drawn onto nothing leaves you open for
+one exchange. The measurement that says it worked is not that the numbers moved, it is that a
+policy which **deliberately** draws the parry and hits the opening is now the best in the table.
+If no play could convert the opening, the rule would be decoration.
+
+**The tell was not a tell.** The opponent shifts its weight before it attacks — but the check was
+gated on `phaseT > sec(0.4)`, so at 24 ticks of thinking you saw nothing and at 25 you saw a 97%
+accurate oracle. Identical logic, with and without the pause: 31.6% versus 60.0%. **Twenty-eight
+points of win rate for the act of waiting half a second.** Worse, it was computed from a throwaway
+call to `chooseFoe` that the game then discarded and made a *different* decision from; the two
+agreed 97% of the time by luck of the score gaps. And no harness exercised it at all — every policy
+played on the first tick of its turn, so in 2,000 bouts the tell was shown zero times. The strongest
+line in the game was completely untested code.
+
+It now decides once, on the first tick, from the opponent's real committed choice, and it lies:
+measured over 14,767 exchanges it shows on **74%** of attacks and on **18%** of things that are not
+attacks. A tell you can trust completely is not a tell, it is a scoreboard.
+
+**Four browser bugs, none reachable from the simulation.**
+
+- The second lamp of a double was a wall-clock `setTimeout` that `restart()` never cancelled. The
+  end-of-bout panel says *press space*; press it within 260ms and the new 0–0 bout opened with the
+  opponent's lamp lit. It is a tick counter now, counting `RULES.lockout` — which had been declared
+  in `sim.mjs` and never read while `main.mjs` hardcoded `260` beside it.
+- The opponent's score pip lit on the same tick as the **first** lamp, so the scoreboard announced
+  the double a quarter of a second before the second lamp did. The game is named after that beat and
+  was giving it away itself.
+- The card hit boxes were 44 wide with an 8px gap against the 56 and 6 actually drawn. On a phone
+  the outer third of the left and right cards was dead and a tap in the gap played card one. This is
+  the same mistake as The Far Light's verifier reimplementing its physics: `render.mjs` now exports
+  the layout and `main.mjs` asks it.
+- Every keystroke during the 2.3 seconds a touch takes to resolve was spliced out of the buffer and
+  dropped in silence. And hiding the tab set `paused` while returning never cleared it.
+
+**Forty per cent of the frame was painted black on black.** The hall atmosphere, the far wall and
+the ceiling were all drawn in palette entries holding the same `$0F` as the backdrop. This is the
+third time that exact trap has been hit in this project, and it is why `palette.mjs` now carries a
+comment next to the offending entry.
+
+**The lamps and the fencers used different colours for the same two people.** Red and green lamps
+over ochre and blue fencers: the one thing the game asks of you — look up at the box and read who
+landed — needed a translation step nothing on screen provided, and only left-versus-right was
+carrying it, which the screen shake moves. You are red and they are green now, everywhere.
+
+The honest summary: **an invariant can check that what happens is legal and can never check that
+anything happens at all** — and a soak harness, however many hours it runs, only ever exercises the
+code its policies reach.
